@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: skydispatch
+  datasource:
+    # Using H2 for default/testing in this environment, but configured for MySQL compatibility
+    # In a real environment, replace with MySQL URL
+    url: jdbc:h2:mem:skydispatch;DB_CLOSE_DELAY=-1;MODE=MySQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      # timeout: 5000
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.example.skydispatch: DEBUG
