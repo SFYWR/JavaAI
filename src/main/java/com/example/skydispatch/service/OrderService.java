@@ -66,6 +66,12 @@ public class OrderService {
      * 2. 初始化状态为 UNPAID
      * 3. 发送消息到支付延迟队列 (5分钟)
      * 4. 写入缓存并添加至布隆过滤器
+     *
+     * @param description 订单描述
+     * @param merchantId 商户ID
+     * @param deliveryLat 送货纬度
+     * @param deliveryLon 送货经度
+     * @return 创建成功的订单对象
      */
     public Order createOrder(String description, Long merchantId, double deliveryLat, double deliveryLon) {
         Merchant merchant = merchantMapper.selectById(merchantId);
@@ -99,6 +105,8 @@ public class OrderService {
      * 支付订单
      * 1. 更新状态为 PENDING
      * 2. 加入撮合匹配池
+     *
+     * @param orderId 订单ID
      */
     @Transactional
     public void payOrder(Long orderId) {
@@ -209,6 +217,10 @@ public class OrderService {
 
     /**
      * 查找附近的无人机 (API 用)
+     * @param lat 中心纬度
+     * @param lon 中心经度
+     * @param radiusKm 搜索半径
+     * @return 附近的无人机ID列表
      */
     public List<String> findNearbyDrones(double lat, double lon, double radiusKm) {
         Circle circle = new Circle(new Point(lon, lat), new Distance(radiusKm, Metrics.KILOMETERS));
@@ -346,6 +358,7 @@ public class OrderService {
 
     /**
      * 判断电池是否足够 (双段距离：Drone -> Merchant + Merchant -> User)
+     * 逻辑：(总距离 / 平均速度) * 耗电因子 < 当前电量
      */
     private boolean isBatterySufficient(Order order, Drone drone, double distanceToMerchantKm) {
         // Segment 1: Drone -> Merchant (传入参数)
@@ -379,6 +392,8 @@ public class OrderService {
     /**
      * 获取订单详情 (使用高级缓存策略)
      * 热点数据查询，使用逻辑过期解决击穿问题
+     * @param orderId 订单ID
+     * @return 订单详情
      */
     public Order getOrder(Long orderId) {
         // 使用 CacheClient 的逻辑过期查询方法
@@ -395,6 +410,8 @@ public class OrderService {
     /**
      * 处理 MQ 抢单消息的具体业务逻辑 (供 Listener 调用)
      * 使用数据库乐观锁作为最终一致性保障
+     * @param orderId 订单ID
+     * @param droneId 无人机ID
      */
     @Transactional
     public void processGrabOrder(Long orderId, Long droneId) {
@@ -418,6 +435,7 @@ public class OrderService {
     /**
      * 处理订单超时逻辑 (处理未接单超时和支付超时)
      * 根据当前状态决定处理逻辑
+     * @param orderId 订单ID
      */
     @Transactional
     public void processOrderTimeout(Long orderId) {

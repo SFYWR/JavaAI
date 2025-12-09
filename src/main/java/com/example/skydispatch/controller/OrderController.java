@@ -20,7 +20,12 @@ public class OrderController {
     private OrderService orderService;
 
     /**
-     * 发布新订单 (无需提供取货坐标，由商户ID决定)
+     * 发布新订单
+     * @param description 订单描述
+     * @param merchantId 商户ID (自动关联取货坐标)
+     * @param deliveryLat 送货坐标纬度
+     * @param deliveryLon 送货坐标经度
+     * @return 创建的订单对象
      */
     @PostMapping
     public Order createOrder(@RequestParam String description,
@@ -32,6 +37,8 @@ public class OrderController {
 
     /**
      * 支付订单
+     * @param orderId 订单ID
+     * @return 支付结果消息
      */
     @PostMapping("/{orderId}/pay")
     public ResponseEntity<String> payOrder(@PathVariable Long orderId) {
@@ -70,7 +77,8 @@ public class OrderController {
     /**
      * 完成订单 (幂等性接口)
      * @param orderId 订单ID
-     * @param requestId 请求唯一标识，用于幂等校验
+     * @param requestId 请求唯一标识，用于幂等校验 (防止重复提交)
+     * @return 操作结果
      */
     @PostMapping("/{orderId}/complete")
     public ResponseEntity<String> completeOrder(@PathVariable Long orderId, @RequestParam String requestId) {
@@ -84,6 +92,8 @@ public class OrderController {
 
     /**
      * 获取订单详情
+     * @param orderId 订单ID
+     * @return 订单详情对象
      */
     @GetMapping("/{orderId}")
     public Order getOrder(@PathVariable Long orderId) {

@@ -46,6 +46,7 @@ public class CacheClient {
 
     /**
      * 将 ID 添加到布隆过滤器
+     * @param id 业务ID
      */
     public void addToBloomFilter(Long id) {
         bloomFilter.add(id);
@@ -53,6 +54,10 @@ public class CacheClient {
 
     /**
      * 普通设置缓存
+     * @param key 缓存键
+     * @param value 缓存值
+     * @param time 过期时间数值
+     * @param unit 时间单位
      */
     public void set(String key, Object value, Long time, TimeUnit unit) {
         try {
@@ -64,6 +69,11 @@ public class CacheClient {
 
     /**
      * 设置逻辑过期 (解决缓存击穿)
+     * 将过期时间封装在 RedisData 对象中，Redis 层面不设置 TTL
+     * @param key 缓存键
+     * @param value 缓存值
+     * @param time 逻辑过期时间数值
+     * @param unit 时间单位
      */
     public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit unit) {
         RedisData redisData = new RedisData();
@@ -79,6 +89,10 @@ public class CacheClient {
     /**
      * 设置随机过期时间 (解决缓存雪崩)
      * 在基础 TTL 上增加随机波动 (0-10%)
+     * @param key 缓存键
+     * @param value 缓存值
+     * @param time 基础过期时间
+     * @param unit 时间单位
      */
     public void setWithRandomTtl(String key, Object value, Long time, TimeUnit unit) {
         long ttlSeconds = unit.toSeconds(time);
@@ -89,6 +103,15 @@ public class CacheClient {
     /**
      * 解决缓存穿透 (Pass-Through)
      * 流程：查布隆 -> 查缓存 -> 查库 -> 回写缓存(含空值)
+     * @param keyPrefix Key前缀
+     * @param id 业务ID
+     * @param type 返回类型
+     * @param dbFallback 数据库查询函数
+     * @param time 缓存时间
+     * @param unit 时间单位
+     * @param <R> 返回值泛型
+     * @param <ID> ID泛型
+     * @return 查询结果
      */
     public <R, ID> R queryWithPassThrough(String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         String key = keyPrefix + id;
@@ -133,6 +156,15 @@ public class CacheClient {
     /**
      * 解决缓存击穿 (Logical Expiration)
      * 流程：查缓存 -> 检查逻辑过期 -> (未过期)返回 -> (已过期)获取锁 -> 开启线程重建 -> 返回旧数据
+     * @param keyPrefix Key前缀
+     * @param id 业务ID
+     * @param type 返回类型
+     * @param dbFallback 数据库查询函数
+     * @param time 逻辑过期时间
+     * @param unit 时间单位
+     * @param <R> 返回值泛型
+     * @param <ID> ID泛型
+     * @return 查询结果
      */
     public <R, ID> R queryWithLogicalExpire(String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         String key = keyPrefix + id;
@@ -192,6 +224,7 @@ public class CacheClient {
 
     /**
      * 删除缓存 (Cache Aside)
+     * @param key 缓存键
      */
     public void delete(String key) {
         stringRedisTemplate.delete(key);

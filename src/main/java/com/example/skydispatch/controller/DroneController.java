@@ -20,6 +20,9 @@ public class DroneController {
 
     /**
      * 注册无人机
+     * @param serialNumber 无人机序列号
+     * @param model 无人机型号
+     * @return 注册后的无人机信息
      */
     @PostMapping("/register")
     public Drone register(@RequestParam String serialNumber, @RequestParam String model) {
@@ -29,7 +32,7 @@ public class DroneController {
     /**
      * 更新无人机状态
      * @param id 无人机ID
-     * @param status 状态 (ONLINE, OFFLINE, BUSY)
+     * @param status 新状态 (ONLINE, OFFLINE, BUSY)
      */
     @PostMapping("/{id}/status")
     public void updateStatus(@PathVariable Long id, @RequestParam String status) {
@@ -42,6 +45,7 @@ public class DroneController {
      * @param id 无人机ID
      * @param lat 纬度
      * @param lon 经度
+     * @return 飞行指令 (DroneInstruction)
      */
     @PostMapping("/{id}/heartbeat")
     public ResponseEntity<DroneInstruction> heartbeat(@PathVariable Long id, @RequestParam double lat, @RequestParam double lon) {
