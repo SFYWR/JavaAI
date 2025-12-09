@@ -21,6 +21,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -51,6 +52,9 @@ class SkydispatchUnitTests {
 
     @Mock
     private org.springframework.data.redis.core.SetOperations<String, Object> setOperations;
+
+    @Mock
+    private DroneService mockDroneService; // Mock internal service dependency for OrderService
 
     @InjectMocks
     private DroneService droneService;
@@ -159,5 +163,42 @@ class SkydispatchUnitTests {
         Assertions.assertFalse(result);
         // Verify Lua script NOT executed
         verify(redisTemplate, never()).execute(any(RedisScript.class), any(List.class));
+    }
+
+    @Test
+    void testCompleteOrderSuccess() {
+        // Mock setIfAbsent returning TRUE (First request)
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+
+        Order order = new Order();
+        order.setId(1L);
+        order.setStatus("ASSIGNED");
+        order.setDroneId(100L);
+
+        when(orderMapper.selectById(1L)).thenReturn(order);
+
+        orderService.completeOrder(1L, "req-123");
+
+        // Verify update to COMPLETED
+        Assertions.assertEquals("COMPLETED", order.getStatus());
+        verify(orderMapper).updateById(order);
+        // Verify drone released (using mockDroneService)
+        verify(mockDroneService).updateStatus(100L, "ONLINE");
+        // Verify cache cleanup
+        verify(redisTemplate).delete("drone:active_order:100");
+    }
+
+    @Test
+    void testCompleteOrderDuplicate() {
+        // Mock setIfAbsent returning FALSE (Duplicate request)
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+
+        orderService.completeOrder(1L, "req-123");
+
+        // Verify NO DB interaction
+        verify(orderMapper, never()).selectById(anyLong());
+        verify(orderMapper, never()).updateById(any());
     }
 }

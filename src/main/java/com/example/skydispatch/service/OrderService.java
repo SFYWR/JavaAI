@@ -40,6 +40,9 @@ public class OrderService {
     @Autowired
     private RabbitTemplate rabbitTemplate;
 
+    @Autowired
+    private DroneService droneService; // 为了更新无人机状态，通常应调用 Service 而不是 Mapper
+
     private static final String DRONE_GEO_KEY = "drones:locations";
     private static final String ORDER_CACHE_KEY_PREFIX = "order:";
     private static final String ORDER_STATUS_KEY_PREFIX = "order:status:"; // 专门用于高并发原子检测的状态Key
@@ -158,6 +161,63 @@ public class OrderService {
 
         // 抢单失败
         return false;
+    }
+
+    /**
+     * 完成订单 (幂等性设计)
+     * @param orderId 订单ID
+     * @param requestId 客户端请求唯一标识 (防止网络重发)
+     */
+    @Transactional
+    public void completeOrder(Long orderId, String requestId) {
+        // 1. 幂等性校验 (Set If Absent)
+        // 只有当 requestId 不存在时才执行，key 有效期 10 分钟
+        Boolean isFirstRequest = redisTemplate.opsForValue().setIfAbsent(
+                "idempotency:complete_order:" + requestId,
+                "1",
+                10,
+                TimeUnit.MINUTES
+        );
+
+        if (isFirstRequest == null || !isFirstRequest) {
+            // 既然 key 已存在，说明是重复请求，直接返回（视为成功）
+            // 或者抛出异常提示
+            System.out.println("Duplicate request detected: " + requestId);
+            return;
+        }
+
+        // 2. 业务逻辑执行
+        Order order = orderMapper.selectById(orderId);
+        if (order == null) {
+            throw new RuntimeException("Order not found");
+        }
+
+        if (!"ASSIGNED".equals(order.getStatus())) {
+            // 只有已分配的订单才能完成
+            // 如果已经是 COMPLETED，可能是上次请求数据库成功但缓存失败导致的，或者是并发问题
+            // 由于有幂等性Key挡在前面，这里主要防业务状态不对
+            if ("COMPLETED".equals(order.getStatus())) {
+                return; // 已经是完成状态
+            }
+            throw new RuntimeException("Order status is not ASSIGNED");
+        }
+
+        // 更新订单状态
+        order.setStatus("COMPLETED");
+        orderMapper.updateById(order);
+
+        // 释放无人机 (设为 ONLINE)
+        Long droneId = order.getDroneId();
+        if (droneId != null) {
+            droneService.updateStatus(droneId, "ONLINE");
+            // 清除活跃订单映射
+            redisTemplate.delete("drone:active_order:" + droneId);
+        }
+
+        // 更新/清除订单详情缓存
+        redisTemplate.delete(ORDER_CACHE_KEY_PREFIX + orderId);
+
+        System.out.println("Order " + orderId + " completed successfully.");
     }
 
     /**

@@ -3,6 +3,7 @@ package com.example.skydispatch.controller;
 import com.example.skydispatch.entity.Order;
 import com.example.skydispatch.service.OrderService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -50,6 +51,21 @@ public class OrderController {
     public String grabOrder(@PathVariable Long orderId, @RequestParam Long droneId) {
         boolean success = orderService.grabOrder(orderId, droneId);
         return success ? "SUCCESS" : "FAILED";
+    }
+
+    /**
+     * 完成订单 (幂等性接口)
+     * @param orderId 订单ID
+     * @param requestId 请求唯一标识，用于幂等校验
+     */
+    @PostMapping("/{orderId}/complete")
+    public ResponseEntity<String> completeOrder(@PathVariable Long orderId, @RequestParam String requestId) {
+        try {
+            orderService.completeOrder(orderId, requestId);
+            return ResponseEntity.ok("Order completed successfully");
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     /**
