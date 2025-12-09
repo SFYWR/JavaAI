@@ -17,6 +17,7 @@ import org.springframework.data.redis.core.GeoOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.util.Collections;
 import java.util.List;
@@ -38,6 +39,9 @@ class SkydispatchUnitTests {
 
     @Mock
     private RabbitTemplate rabbitTemplate;
+
+    @Mock
+    private SimpMessagingTemplate messagingTemplate;
 
     @Mock
     private GeoOperations<String, Object> geoOperations;
@@ -69,11 +73,16 @@ class SkydispatchUnitTests {
     void testHeartbeat() {
         when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(setOperations.members(anyString())).thenReturn(Collections.emptySet());
+        // Mock returning an active order ID
+        when(valueOperations.get(eq("drone:active_order:1"))).thenReturn(100L);
 
         droneService.heartbeat(1L, 40.0, -74.0);
 
         verify(geoOperations).add(any(String.class), any(org.springframework.data.geo.Point.class), any(String.class));
+        // Verify WebSocket push
+        verify(messagingTemplate).convertAndSend(eq("/topic/orders/100"), any(org.springframework.data.geo.Point.class));
     }
 
     @Test
@@ -105,6 +114,8 @@ class SkydispatchUnitTests {
         Assertions.assertTrue(result);
         // Verify message sent to MQ for DB persistence
         verify(rabbitTemplate).convertAndSend(eq("order.exchange"), eq("order.grab"), any(Object.class));
+        // Verify active order mapping set
+        verify(valueOperations).set(eq("drone:active_order:100"), eq(1L), anyLong(), any());
     }
 
     @Test

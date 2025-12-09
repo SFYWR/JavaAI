@@ -9,6 +9,7 @@ import com.example.skydispatch.util.GeoUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.geo.Point;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -27,6 +28,9 @@ public class DroneService {
 
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
+
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
 
     // Redis Key，用于存储所有无人机的地理位置信息 (GEO Hash)
     private static final String DRONE_GEO_KEY = "drones:locations";
@@ -68,7 +72,7 @@ public class DroneService {
     }
 
     /**
-     * 无人机心跳上报位置 (包含禁飞区检测)
+     * 无人机心跳上报位置 (包含禁飞区检测与实时轨迹推送)
      * 模拟无人机每秒上报 GPS 坐标
      * 使用 Redis GEO (GEOADD) 存储，以便快速计算附近的无人机
      * @param droneId 无人机ID
@@ -81,6 +85,13 @@ public class DroneService {
         // 注意：Redis GEO 接受 (经度, 纬度) 顺序
         Point currentPoint = new Point(lon, lat);
         redisTemplate.opsForGeo().add(DRONE_GEO_KEY, currentPoint, droneId.toString());
+
+        // 实时轨迹推送: 检查当前无人机是否有关联的活跃订单
+        Object activeOrderId = redisTemplate.opsForValue().get("drone:active_order:" + droneId);
+        if (activeOrderId != null) {
+            // 推送到 WebSocket 订阅者: /topic/orders/{orderId}
+            messagingTemplate.convertAndSend("/topic/orders/" + activeOrderId, currentPoint);
+        }
 
         // 禁飞区检测
         if (isInsideNoFlyZone(currentPoint)) {

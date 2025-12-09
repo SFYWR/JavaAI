@@ -111,6 +111,9 @@ public class OrderService {
 
         if (result != null && result == 1) {
             // Redis 抢单成功
+            // 缓存 无人机-订单 映射关系，供 WebSocket 实时推送使用
+            redisTemplate.opsForValue().set("drone:active_order:" + droneId, orderId, 2, TimeUnit.HOURS);
+
             // 构造消息体，发送到 MQ 进行异步落库
             // 这里简单发送 Map 包含 orderId 和 droneId
             Map<String, Object> msg = Map.of("orderId", orderId, "droneId", droneId);

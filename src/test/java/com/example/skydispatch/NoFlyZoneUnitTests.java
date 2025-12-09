@@ -38,6 +38,12 @@ class NoFlyZoneUnitTests {
     @Mock
     private SetOperations<String, Object> setOperations;
 
+    @Mock
+    private org.springframework.data.redis.core.ValueOperations<String, Object> valueOperations;
+
+    @Mock
+    private org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+
     @InjectMocks
     private DroneService droneService;
 
@@ -45,6 +51,7 @@ class NoFlyZoneUnitTests {
     void testHeartbeatNormal() {
         when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         // Mock empty no fly zones
         when(setOperations.members(any(String.class))).thenReturn(Collections.emptySet());
 
@@ -57,6 +64,7 @@ class NoFlyZoneUnitTests {
     void testHeartbeatInNoFlyZone() {
         when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
         // Define a square no fly zone around (0,0) from -10 to 10
         NoFlyZoneDto zone = new NoFlyZoneDto("TestZone", Arrays.asList(
@@ -78,6 +86,7 @@ class NoFlyZoneUnitTests {
     void testHeartbeatOutsideNoFlyZone() {
         when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
         // Define a square no fly zone around (0,0) from -10 to 10
         NoFlyZoneDto zone = new NoFlyZoneDto("TestZone", Arrays.asList(
