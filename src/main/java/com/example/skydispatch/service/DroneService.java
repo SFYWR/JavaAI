@@ -72,4 +72,44 @@ public class DroneService {
 
         // 在实际生产中，可能还需要更新数据库中的最后位置，或检查状态是否需要变更为 ONLINE
     }
+
+    // --- 管理员专用方法 ---
+
+    /**
+     * 管理员添加新无人机
+     */
+    public Drone adminAddDrone(String serialNumber, String model) {
+        return registerDrone(serialNumber, model);
+    }
+
+    /**
+     * 管理员修改无人机状态
+     * 约束：不能修改正在忙碌(BUSY)的无人机
+     */
+    public void adminUpdateStatus(Long droneId, String status) {
+        Drone drone = droneMapper.selectById(droneId);
+        if (drone == null) {
+            throw new RuntimeException("Drone not found");
+        }
+        if ("BUSY".equals(drone.getStatus())) {
+            throw new RuntimeException("Cannot modify a busy drone");
+        }
+        updateStatus(droneId, status);
+    }
+
+    /**
+     * 管理员修改无人机位置
+     * 约束：不能修改正在忙碌(BUSY)的无人机
+     */
+    public void adminUpdateLocation(Long droneId, double lat, double lon) {
+        Drone drone = droneMapper.selectById(droneId);
+        if (drone == null) {
+            throw new RuntimeException("Drone not found");
+        }
+        if ("BUSY".equals(drone.getStatus())) {
+            throw new RuntimeException("Cannot modify location of a busy drone");
+        }
+        // 更新 Redis GEO
+        heartbeat(droneId, lat, lon);
+    }
 }

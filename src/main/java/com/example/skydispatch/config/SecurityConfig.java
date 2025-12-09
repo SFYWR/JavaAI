@@ -36,6 +36,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable) // 禁用 CSRF (REST API 通常不需要)
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/**").permitAll() // 开放登录注册接口
+                .requestMatchers("/api/admin/**").hasRole("ADMIN") // 管理员接口需 ADMIN 角色
                 .anyRequest().authenticated() // 其他接口需认证
             )
             .sessionManagement(session -> session
