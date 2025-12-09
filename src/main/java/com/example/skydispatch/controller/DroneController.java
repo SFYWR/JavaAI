@@ -1,8 +1,10 @@
 package com.example.skydispatch.controller;
 
+import com.example.skydispatch.dto.DroneInstruction;
 import com.example.skydispatch.entity.Drone;
 import com.example.skydispatch.service.DroneService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -36,12 +38,13 @@ public class DroneController {
 
     /**
      * 接收无人机心跳（GPS坐标）
+     * 并返回指令（如是否触发禁飞区警告）
      * @param id 无人机ID
      * @param lat 纬度
      * @param lon 经度
      */
     @PostMapping("/{id}/heartbeat")
-    public void heartbeat(@PathVariable Long id, @RequestParam double lat, @RequestParam double lon) {
-        droneService.heartbeat(id, lat, lon);
+    public ResponseEntity<DroneInstruction> heartbeat(@PathVariable Long id, @RequestParam double lat, @RequestParam double lon) {
+        return ResponseEntity.ok(droneService.heartbeat(id, lat, lon));
     }
 }

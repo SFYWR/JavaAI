@@ -45,6 +45,9 @@ class SkydispatchUnitTests {
     @Mock
     private ValueOperations<String, Object> valueOperations;
 
+    @Mock
+    private org.springframework.data.redis.core.SetOperations<String, Object> setOperations;
+
     @InjectMocks
     private DroneService droneService;
 
@@ -65,6 +68,8 @@ class SkydispatchUnitTests {
     @Test
     void testHeartbeat() {
         when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(setOperations.members(anyString())).thenReturn(Collections.emptySet());
 
         droneService.heartbeat(1L, 40.0, -74.0);
 
