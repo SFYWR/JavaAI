@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 订单管理接口
- * 提供创建订单、查询附近无人机、抢单等功能
+ * 提供创建订单、支付、查询附近无人机、抢单等功能
  */
 @RestController
 @RequestMapping("/api/orders")
@@ -20,13 +20,27 @@ public class OrderController {
     private OrderService orderService;
 
     /**
-     * 发布新订单
+     * 发布新订单 (无需提供取货坐标，由商户ID决定)
      */
     @PostMapping
     public Order createOrder(@RequestParam String description,
-                             @RequestParam double pickupLat, @RequestParam double pickupLon,
-                             @RequestParam double deliveryLat, @RequestParam double deliveryLon) {
-        return orderService.createOrder(description, pickupLat, pickupLon, deliveryLat, deliveryLon);
+                             @RequestParam Long merchantId,
+                             @RequestParam double deliveryLat,
+                             @RequestParam double deliveryLon) {
+        return orderService.createOrder(description, merchantId, deliveryLat, deliveryLon);
+    }
+
+    /**
+     * 支付订单
+     */
+    @PostMapping("/{orderId}/pay")
+    public ResponseEntity<String> payOrder(@PathVariable Long orderId) {
+        try {
+            orderService.payOrder(orderId);
+            return ResponseEntity.ok("Order paid successfully");
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     /**

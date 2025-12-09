@@ -20,6 +20,9 @@ public class Order {
     // 订单描述
     private String description;
 
+    // 商户ID
+    private Long merchantId;
+
     // 取货坐标
     private Double pickupLat;
     private Double pickupLon;

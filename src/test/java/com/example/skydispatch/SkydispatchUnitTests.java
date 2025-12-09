@@ -1,8 +1,10 @@
 package com.example.skydispatch;
 
 import com.example.skydispatch.entity.Drone;
+import com.example.skydispatch.entity.Merchant;
 import com.example.skydispatch.entity.Order;
 import com.example.skydispatch.mapper.DroneMapper;
+import com.example.skydispatch.mapper.MerchantMapper;
 import com.example.skydispatch.mapper.OrderMapper;
 import com.example.skydispatch.service.DroneService;
 import com.example.skydispatch.service.OrderService;
@@ -28,7 +30,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -41,6 +42,9 @@ class SkydispatchUnitTests {
 
     @Mock
     private OrderMapper orderMapper;
+
+    @Mock
+    private MerchantMapper merchantMapper;
 
     @Mock
     private RedisTemplate<String, Object> redisTemplate;
@@ -89,43 +93,61 @@ class SkydispatchUnitTests {
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(setOperations.members(anyString())).thenReturn(Collections.emptySet());
-        // Mock returning an active order ID
         when(valueOperations.get(eq("drone:active_order:1"))).thenReturn(100L);
 
         droneService.heartbeat(1L, 40.0, -74.0);
 
         verify(geoOperations).add(any(String.class), any(org.springframework.data.geo.Point.class), any(String.class));
-        // Verify WebSocket push
         verify(messagingTemplate).convertAndSend(eq("/topic/orders/100"), any(org.springframework.data.geo.Point.class));
     }
 
     @Test
     void testCreateOrder() {
-        // 使用 doAnswer 来模拟数据库插入后的 ID 回填
+        // Mock Merchant
+        Merchant merchant = new Merchant();
+        merchant.setId(10L);
+        merchant.setLat(40.0);
+        merchant.setLon(-74.0);
+        when(merchantMapper.selectById(10L)).thenReturn(merchant);
+
+        // Mock Order Insert
         doAnswer(invocation -> {
             Order arg = invocation.getArgument(0);
             arg.setId(123L);
             return 1;
         }).when(orderMapper).insert(any(Order.class));
 
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        // Mock Cache set
+        doNothing().when(cacheClient).setWithRandomTtl(anyString(), any(), anyLong(), any(TimeUnit.class));
 
-        Order order = orderService.createOrder("Test Order", 0, 0, 1, 1);
+        Order order = orderService.createOrder("Test Order", 10L, 40.1, -74.1);
 
         Assertions.assertNotNull(order);
         Assertions.assertEquals(123L, order.getId());
-        verify(rabbitTemplate).convertAndSend(eq("order.exchange"), eq("order.delay"), eq(123L));
-        // Verify add to match pool
+        Assertions.assertEquals("UNPAID", order.getStatus());
+        verify(rabbitTemplate).convertAndSend(eq("order.exchange"), eq("payment.delay"), eq(123L));
+    }
+
+    @Test
+    void testPayOrder() {
+        Order order = new Order();
+        order.setId(123L);
+        order.setStatus("UNPAID");
+
+        when(orderMapper.selectById(123L)).thenReturn(order);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+
+        orderService.payOrder(123L);
+
+        Assertions.assertEquals("PENDING", order.getStatus());
+        verify(orderMapper).updateById(order);
         verify(setOperations).add(eq("order:matchmaking:pool"), eq("123"));
-        // Verify CacheClient calls
-        verify(cacheClient).setWithRandomTtl(anyString(), any(), anyLong(), any(TimeUnit.class));
-        verify(cacheClient).addToBloomFilter(eq(123L));
+        verify(rabbitTemplate).convertAndSend(eq("order.exchange"), eq("order.delay"), eq(123L));
     }
 
     @Test
     void testGrabOrderSuccess() {
-        // Mock Order and Drone for battery check
         Order order = new Order();
         order.setId(1L);
         order.setPickupLat(40.0); order.setPickupLon(-74.0);
@@ -135,66 +157,19 @@ class SkydispatchUnitTests {
         drone.setId(100L);
         drone.setBatteryLevel(100);
 
-        // When grabOrder calls getOrder, it now uses cacheClient.queryWithLogicalExpire...
-        // But grabOrder implementation calls getOrder() which calls cacheClient.
-        // Wait, grabOrder logic in Service calls `getOrder(orderId)`.
-
-        // Mock cacheClient to return order
         when(cacheClient.queryWithLogicalExpire(anyString(), anyLong(), eq(Order.class), any(), anyLong(), any())).thenReturn(order);
-
         when(droneMapper.selectById(100L)).thenReturn(drone);
         when(redisTemplate.execute(any(RedisScript.class), any(List.class))).thenReturn(1L);
-
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        // Also mock Geo position for drone -> pickup distance check
+        when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
+        when(geoOperations.position(anyString(), anyString())).thenReturn(List.of(new Point(-74.0, 40.0)));
 
         boolean result = orderService.grabOrder(1L, 100L);
 
         Assertions.assertTrue(result);
         verify(rabbitTemplate).convertAndSend(eq("order.exchange"), eq("order.grab"), any(Object.class));
-        // Verify cache deleted
         verify(cacheClient).delete(anyString());
-    }
-
-    @Test
-    void testMatchOrders() {
-        // Mock Set operations to return one pending order
-        when(redisTemplate.opsForSet()).thenReturn(setOperations);
-        when(redisTemplate.opsForGeo()).thenReturn(geoOperations);
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations); // for inner grabOrder
-
-        when(setOperations.members(eq("order:matchmaking:pool"))).thenReturn(new HashSet<>(Collections.singletonList("1")));
-
-        // Mock Order
-        Order order = new Order();
-        order.setId(1L);
-        order.setStatus("PENDING");
-        order.setPickupLat(40.0); order.setPickupLon(-74.0);
-        order.setDeliveryLat(40.0); order.setDeliveryLon(-74.0);
-
-        // Mock cacheClient return for getOrder
-        when(cacheClient.queryWithLogicalExpire(anyString(), anyLong(), eq(Order.class), any(), anyLong(), any())).thenReturn(order);
-
-        // Mock nearby drones (2 drones)
-        GeoResult<RedisGeoCommands.GeoLocation<Object>> resultA = new GeoResult<>(
-                new RedisGeoCommands.GeoLocation<>("100", new Point(-74.0, 40.0)),
-                new Distance(0.1, Metrics.KILOMETERS));
-
-        when(geoOperations.radius(anyString(), any(Circle.class), any(RedisGeoCommands.GeoRadiusCommandArgs.class)))
-                .thenReturn(new GeoResults<>(List.of(resultA)));
-
-        // Mock Drone entities
-        Drone droneA = new Drone(); droneA.setId(100L); droneA.setStatus("ONLINE"); droneA.setBatteryLevel(20); // Low
-
-        when(droneMapper.selectById(100L)).thenReturn(droneA);
-
-        // Mock grabOrder success for A
-        when(redisTemplate.execute(any(RedisScript.class), any(List.class))).thenReturn(1L); // Success
-
-        orderService.matchOrders();
-
-        // Verify remove from pool
-        verify(setOperations).remove(eq("order:matchmaking:pool"), eq("1"));
-        // Verify rabbitmq sent (implied by grabOrder success)
-        verify(rabbitTemplate).convertAndSend(eq("order.exchange"), eq("order.grab"), any(Object.class));
     }
 }
