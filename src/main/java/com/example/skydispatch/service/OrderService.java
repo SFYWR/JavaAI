@@ -2,7 +2,9 @@ package com.example.skydispatch.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.example.skydispatch.config.RabbitConfig;
+import com.example.skydispatch.entity.Drone;
 import com.example.skydispatch.entity.Order;
+import com.example.skydispatch.mapper.DroneMapper;
 import com.example.skydispatch.mapper.OrderMapper;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,9 @@ public class OrderService {
     private OrderMapper orderMapper;
 
     @Autowired
+    private DroneMapper droneMapper;
+
+    @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
     @Autowired
@@ -38,6 +43,10 @@ public class OrderService {
     private static final String DRONE_GEO_KEY = "drones:locations";
     private static final String ORDER_CACHE_KEY_PREFIX = "order:";
     private static final String ORDER_STATUS_KEY_PREFIX = "order:status:"; // 专门用于高并发原子检测的状态Key
+
+    // 智能电池管理参数
+    private static final double DRONE_AVG_SPEED_KMH = 36.0; // 平均时速 km/h
+    private static final double POWER_CONSUMPTION_PER_SECOND = 0.05; // 每秒耗电量 (%) (假设值)
 
     /**
      * 创建订单
@@ -67,7 +76,7 @@ public class OrderService {
     }
 
     /**
-     * 查找附近的无人机
+     * 查找附近的无人机 (包含电量筛选)
      */
     public List<String> findNearbyDrones(double lat, double lon, double radiusKm) {
         Circle circle = new Circle(new Point(lon, lat), new Distance(radiusKm, Metrics.KILOMETERS));
@@ -80,19 +89,39 @@ public class OrderService {
                 droneIds.add(result.getContent().getName().toString());
             }
         }
+
+        // TODO: 在这里可以进一步过滤电量不足的无人机，但 findNearbyDrones 通常用于展示列表
+        // 实际的强校验在 grabOrder 中进行
         return droneIds;
     }
 
     /**
      * 高并发抢单接口 (优化版)
-     * 1. 使用 Redis Lua 脚本进行原子检查与状态更新 (PENDING -> ASSIGNED)
-     * 2. 抢单成功后，发送消息到 RabbitMQ 进行异步落库
+     * 1. 增加智能电池管理校验
+     * 2. 使用 Redis Lua 脚本进行原子检查与状态更新 (PENDING -> ASSIGNED)
+     * 3. 抢单成功后，发送消息到 RabbitMQ 进行异步落库
      *
      * @param orderId 订单ID
      * @param droneId 抢单的无人机ID
      * @return true 如果抢单成功 (Redis层面), false 如果失败
      */
     public boolean grabOrder(Long orderId, Long droneId) {
+        // --- 1. 智能电池管理校验 (Smart Battery Optimization) ---
+        // 获取订单详情 (优先查缓存)
+        Order order = getOrder(orderId);
+        if (order == null) return false;
+
+        // 获取无人机详情 (这里需要查库获取最新电量，或者 Redis 缓存)
+        // 假设无人机状态更新不频繁，直接查库简单可靠；如果高频，应读 Redis
+        Drone drone = droneMapper.selectById(droneId);
+        if (drone == null || drone.getBatteryLevel() == null) return false;
+
+        if (!isBatterySufficient(order, drone)) {
+            System.out.println("Drone " + droneId + " battery insufficient for order " + orderId);
+            return false;
+        }
+
+        // --- 2. 状态原子更新 (Redis Lua) ---
         // Lua 脚本：检查状态是否为 PENDING，如果是，则更新为 ASSIGNED 并返回 1，否则返回 0
         String script =
                 "if redis.call('get', KEYS[1]) == 'PENDING' then " +
@@ -120,18 +149,52 @@ public class OrderService {
             rabbitTemplate.convertAndSend(RabbitConfig.ORDER_EXCHANGE, RabbitConfig.ORDER_GRAB_ROUTING_KEY, msg);
 
             // 为了用户体验，也可以在这里预更新一下详情缓存 (Optional)
-            Order cachedOrder = (Order) redisTemplate.opsForValue().get(ORDER_CACHE_KEY_PREFIX + orderId);
-            if (cachedOrder != null) {
-                cachedOrder.setStatus("ASSIGNED");
-                cachedOrder.setDroneId(droneId);
-                redisTemplate.opsForValue().set(ORDER_CACHE_KEY_PREFIX + orderId, cachedOrder, 10, TimeUnit.MINUTES);
-            }
+            order.setStatus("ASSIGNED");
+            order.setDroneId(droneId);
+            redisTemplate.opsForValue().set(ORDER_CACHE_KEY_PREFIX + orderId, order, 10, TimeUnit.MINUTES);
 
             return true;
         }
 
         // 抢单失败
         return false;
+    }
+
+    /**
+     * 判断电池是否足够
+     * 逻辑：(总距离 / 平均速度) * 耗电因子 < 当前电量
+     */
+    private boolean isBatterySufficient(Order order, Drone drone) {
+        // 计算距离：订单取货点到送货点 (这里简化，假设无人机当前就在取货点附近，或者忽略前往取货点的距离)
+        // 更严谨的逻辑应包含：DroneLoc -> PickupLoc -> DeliveryLoc
+        // 这里仅计算 Pickup -> Delivery 作为演示
+        double distanceKm = calculateDistance(order.getPickupLat(), order.getPickupLon(), order.getDeliveryLat(), order.getDeliveryLon());
+
+        // 估算耗时 (秒) = (距离 km * 1000) / (速度 m/s)
+        double speedMs = DRONE_AVG_SPEED_KMH / 3.6;
+        double durationSeconds = (distanceKm * 1000) / speedMs;
+
+        // 估算耗电量
+        double estimatedConsumption = durationSeconds * POWER_CONSUMPTION_PER_SECOND;
+
+        // 预留 20% 安全电量
+        double requiredBattery = estimatedConsumption + 20.0;
+
+        return drone.getBatteryLevel() >= requiredBattery;
+    }
+
+    // Haversine formula calculation (simplified via Spring Data Geo if available, or manual)
+    private double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+        // 简单估算，或者使用 org.springframework.data.geo.Distance
+        // 这里手动实现一个简版 Haversine
+        double R = 6371; // Earth radius in km
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLon = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                   Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                   Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
     }
 
     /**

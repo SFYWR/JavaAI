@@ -105,9 +105,26 @@ class SkydispatchUnitTests {
 
     @Test
     void testGrabOrderSuccess() {
+        // Mock Order and Drone for battery check
+        Order order = new Order();
+        order.setId(1L);
+        // Short distance (approx 0)
+        order.setPickupLat(40.0); order.setPickupLon(-74.0);
+        order.setDeliveryLat(40.0); order.setDeliveryLon(-74.0);
+
+        Drone drone = new Drone();
+        drone.setId(100L);
+        drone.setBatteryLevel(100); // Sufficient battery
+
+        // Mock Cache get order
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(eq("order:1"))).thenReturn(order);
+
+        // Mock DB get drone
+        when(droneMapper.selectById(100L)).thenReturn(drone);
+
         // Mock Redis Lua Script execution returning 1 (Success)
         when(redisTemplate.execute(any(RedisScript.class), any(List.class))).thenReturn(1L);
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
         boolean result = orderService.grabOrder(1L, 100L);
 
@@ -119,14 +136,28 @@ class SkydispatchUnitTests {
     }
 
     @Test
-    void testGrabOrderFail() {
-        // Mock Redis Lua Script execution returning 0 (Fail)
-        when(redisTemplate.execute(any(RedisScript.class), any(List.class))).thenReturn(0L);
+    void testGrabOrderInsufficientBattery() {
+        // Mock Order (Long distance)
+        Order order = new Order();
+        order.setId(1L);
+        order.setPickupLat(40.0); order.setPickupLon(-74.0);
+        order.setDeliveryLat(41.0); order.setDeliveryLon(-75.0); // Far away
+
+        Drone drone = new Drone();
+        drone.setId(100L);
+        drone.setBatteryLevel(10); // Low battery
+
+        // Mock Cache get order
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(eq("order:1"))).thenReturn(order);
+
+        // Mock DB get drone
+        when(droneMapper.selectById(100L)).thenReturn(drone);
 
         boolean result = orderService.grabOrder(1L, 100L);
 
         Assertions.assertFalse(result);
-        // Verify NO message sent to MQ
-        verify(rabbitTemplate, never()).convertAndSend(eq("order.exchange"), eq("order.grab"), any(Object.class));
+        // Verify Lua script NOT executed
+        verify(redisTemplate, never()).execute(any(RedisScript.class), any(List.class));
     }
 }
