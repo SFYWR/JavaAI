@@ -12,13 +12,11 @@ import org.springframework.data.geo.*;
 import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -41,19 +39,21 @@ public class OrderService {
     private RabbitTemplate rabbitTemplate;
 
     @Autowired
-    private DroneService droneService; // 为了更新无人机状态，通常应调用 Service 而不是 Mapper
+    private DroneService droneService;
 
     private static final String DRONE_GEO_KEY = "drones:locations";
     private static final String ORDER_CACHE_KEY_PREFIX = "order:";
-    private static final String ORDER_STATUS_KEY_PREFIX = "order:status:"; // 专门用于高并发原子检测的状态Key
+    private static final String ORDER_STATUS_KEY_PREFIX = "order:status:";
+    // 匹配池 Key
+    private static final String MATCH_POOL_KEY = "order:matchmaking:pool";
 
     // 智能电池管理参数
-    private static final double DRONE_AVG_SPEED_KMH = 36.0; // 平均时速 km/h
-    private static final double POWER_CONSUMPTION_PER_SECOND = 0.05; // 每秒耗电量 (%) (假设值)
+    private static final double DRONE_AVG_SPEED_KMH = 36.0;
+    private static final double POWER_CONSUMPTION_PER_SECOND = 0.05;
 
     /**
-     * 创建订单
-     * 将订单数据存入 MySQL，并预热 Redis 缓存，同时设置订单超时检查
+     * 创建订单 (派单模式)
+     * 将订单数据存入 MySQL，缓存，并加入匹配池
      */
     public Order createOrder(String description, double pickupLat, double pickupLon, double deliveryLat, double deliveryLon) {
         Order order = new Order();
@@ -68,18 +68,106 @@ public class OrderService {
         // Cache Aside 模式：写入数据库后，更新缓存
         redisTemplate.opsForValue().set(ORDER_CACHE_KEY_PREFIX + order.getId(), order, 10, TimeUnit.MINUTES);
 
-        // 设置 Redis 简单状态 Key，用于抢单时的 Lua 原子检测
-        // 格式: order:status:1 -> "PENDING"
+        // 设置 Redis 状态，用于防止后续重复分配
         redisTemplate.opsForValue().set(ORDER_STATUS_KEY_PREFIX + order.getId(), "PENDING", 30, TimeUnit.MINUTES);
 
         // 发送消息到“延迟队列”，用于超时未接单自动取消 (例如 30秒后)
         rabbitTemplate.convertAndSend(RabbitConfig.ORDER_EXCHANGE, RabbitConfig.ORDER_DELAY_ROUTING_KEY, order.getId());
 
+        // 加入匹配池 (使用 Redis Set)
+        redisTemplate.opsForSet().add(MATCH_POOL_KEY, order.getId().toString());
+
         return order;
     }
 
     /**
-     * 查找附近的无人机 (包含电量筛选)
+     * 智能派单任务 (每 5 秒运行一次)
+     * 遍历匹配池中的订单，计算评分，指派最佳无人机
+     */
+    @Scheduled(fixedRate = 5000)
+    public void matchOrders() {
+        Set<Object> orderIds = redisTemplate.opsForSet().members(MATCH_POOL_KEY);
+        if (orderIds == null || orderIds.isEmpty()) {
+            return;
+        }
+
+        System.out.println("Starting matchmaking for " + orderIds.size() + " orders...");
+
+        for (Object orderIdObj : orderIds) {
+            Long orderId = Long.valueOf(orderIdObj.toString());
+
+            // 获取订单信息
+            Order order = getOrder(orderId);
+            if (order == null || !"PENDING".equals(order.getStatus())) {
+                // 如果订单已取消或已分配，移除出池子
+                redisTemplate.opsForSet().remove(MATCH_POOL_KEY, orderIdObj);
+                continue;
+            }
+
+            // 查找附近无人机 (5km 半径)
+            Circle circle = new Circle(new Point(order.getPickupLon(), order.getPickupLat()), new Distance(5.0, Metrics.KILOMETERS));
+            RedisGeoCommands.GeoRadiusCommandArgs args = RedisGeoCommands.GeoRadiusCommandArgs.newGeoRadiusArgs().includeDistance().sortAscending();
+            GeoResults<RedisGeoCommands.GeoLocation<Object>> results = redisTemplate.opsForGeo().radius(DRONE_GEO_KEY, circle, args);
+
+            if (results == null || results.getContent().isEmpty()) {
+                System.out.println("No drones nearby for order " + orderId);
+                continue;
+            }
+
+            // 计算评分并选出最佳无人机
+            Long bestDroneId = null;
+            double maxScore = -1.0;
+
+            for (GeoResult<RedisGeoCommands.GeoLocation<Object>> result : results) {
+                Long droneId = Long.valueOf(result.getContent().getName().toString());
+                double distanceKm = result.getDistance().getValue(); // km
+
+                // 获取无人机电量 (从 DB 查，MVP 简化方案)
+                Drone drone = droneMapper.selectById(droneId);
+                if (drone == null || !"ONLINE".equals(drone.getStatus())) {
+                    continue;
+                }
+
+                // 电量硬性校验 (贪心策略过滤)
+                if (!isBatterySufficient(order, drone)) {
+                    continue;
+                }
+
+                // 计算评分: Score = (1 / 距离) * 0.7 + (电量) * 0.3
+                // 注意 distance 可能为 0
+                double distanceScore = (distanceKm < 0.1) ? 10.0 : (1.0 / distanceKm);
+                double batteryScore = drone.getBatteryLevel(); // 0-100
+
+                // 归一化处理 (简单假设)
+                // distanceScore: 0.2 ~ 10
+                // batteryScore: 0 ~ 100
+                // 为了让两者在同一量级，可以将 distanceScore * 10
+
+                double finalScore = (distanceScore * 10) * 0.7 + (batteryScore) * 0.3;
+
+                if (finalScore > maxScore) {
+                    maxScore = finalScore;
+                    bestDroneId = droneId;
+                }
+            }
+
+            // 指派订单
+            if (bestDroneId != null) {
+                // 使用原有的原子抢单逻辑来执行指派 (保证状态一致性)
+                // 由于是系统指派，可以复用 grabOrder 的逻辑，或者直接调用内部逻辑
+                // 这里调用 grabOrder 来确保 Redis 锁和 MQ 流程的一致性
+                boolean success = grabOrder(orderId, bestDroneId);
+                if (success) {
+                    System.out.println("System matched order " + orderId + " to drone " + bestDroneId + " (Score: " + maxScore + ")");
+                    // 从匹配池移除
+                    redisTemplate.opsForSet().remove(MATCH_POOL_KEY, orderIdObj);
+                }
+            }
+        }
+    }
+
+    /**
+     * 查找附近的无人机
      */
     public List<String> findNearbyDrones(double lat, double lon, double radiusKm) {
         Circle circle = new Circle(new Point(lon, lat), new Distance(radiusKm, Metrics.KILOMETERS));
@@ -92,9 +180,6 @@ public class OrderService {
                 droneIds.add(result.getContent().getName().toString());
             }
         }
-
-        // TODO: 在这里可以进一步过滤电量不足的无人机，但 findNearbyDrones 通常用于展示列表
-        // 实际的强校验在 grabOrder 中进行
         return droneIds;
     }
 
@@ -309,6 +394,9 @@ public class OrderService {
             // 更新缓存和 Redis 状态
             redisTemplate.opsForValue().set(ORDER_CACHE_KEY_PREFIX + orderId, order, 10, TimeUnit.MINUTES);
             redisTemplate.delete(ORDER_STATUS_KEY_PREFIX + orderId); // 删除抢单状态Key
+
+            // 从匹配池移除
+            redisTemplate.opsForSet().remove(MATCH_POOL_KEY, orderId.toString());
 
             System.out.println("Order " + orderId + " has expired and is cancelled.");
         }
