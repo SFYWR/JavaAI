@@ -8,6 +8,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 认证控制器
+ * 处理用户注册、登录及 Token 刷新
+ */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -15,16 +19,30 @@ public class AuthController {
     @Autowired
     private UserService userService;
 
+    /**
+     * 用户注册
+     * @param request 包含用户名和密码
+     */
     @PostMapping("/register")
     public ResponseEntity<User> register(@RequestBody AuthRequest request) {
         return ResponseEntity.ok(userService.register(request.getUsername(), request.getPassword()));
     }
 
+    /**
+     * 用户登录
+     * @param request 包含用户名和密码
+     * @return 包含 Access Token 和 Refresh Token 的响应
+     */
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@RequestBody AuthRequest request) {
         return ResponseEntity.ok(userService.login(request.getUsername(), request.getPassword()));
     }
 
+    /**
+     * 刷新 Token
+     * @param refreshToken 客户端提交的 Refresh Token
+     * @return 新的 Access Token 和 Refresh Token
+     */
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refresh(@RequestBody String refreshToken) {
         // 简单处理，如果是 JSON 包含 key 则需解析，这里假设直接传 token 字符串或 "refreshToken": "..."

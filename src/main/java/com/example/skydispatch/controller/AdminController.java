@@ -7,6 +7,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 管理员控制器
+ * 提供仅管理员可访问的无人机管理和禁飞区管理接口
+ */
 @RestController
 @RequestMapping("/api/admin")
 public class AdminController {
@@ -18,6 +22,8 @@ public class AdminController {
 
     /**
      * 添加新无人机
+     * @param serialNumber 序列号
+     * @param model 型号
      */
     @PostMapping("/drones")
     public ResponseEntity<Drone> addDrone(@RequestParam String serialNumber, @RequestParam String model) {
@@ -26,6 +32,8 @@ public class AdminController {
 
     /**
      * 修改无人机状态
+     * @param id 无人机ID
+     * @param status 新状态
      */
     @PutMapping("/drones/{id}/status")
     public ResponseEntity<String> updateStatus(@PathVariable Long id, @RequestParam String status) {
@@ -39,6 +47,9 @@ public class AdminController {
 
     /**
      * 修改无人机位置
+     * @param id 无人机ID
+     * @param lat 新纬度
+     * @param lon 新经度
      */
     @PutMapping("/drones/{id}/location")
     public ResponseEntity<String> updateLocation(@PathVariable Long id, @RequestParam double lat, @RequestParam double lon) {
@@ -55,6 +66,7 @@ public class AdminController {
     /**
      * 添加禁飞区
      * 接收 JSON 格式的 NoFlyZoneDto
+     * @param noFlyZone 禁飞区数据对象
      */
     @PostMapping("/noflyzones")
     public ResponseEntity<String> addNoFlyZone(@RequestBody NoFlyZoneDto noFlyZone) {
